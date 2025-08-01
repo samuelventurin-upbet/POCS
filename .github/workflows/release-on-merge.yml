@@ -117,18 +117,17 @@ jobs:
             echo "Homolog branch already exists"
           fi
       
-      - name: Merge release to homolog
+      - name: Update homolog branch to release version
         run: |
-          # Fetch all branches
-          git fetch origin
+          # Fetch all branches and tags
+          git fetch origin --tags
           
           # Checkout homolog branch
           git checkout homolog
-          git pull origin homolog
           
-          # Merge the new tag into homolog
+          # Reset homolog to the exact state of the new tag
           NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
-          git merge "$NEW_VERSION" --no-ff -m "Merge $NEW_VERSION into homolog"
+          git reset --hard "$NEW_VERSION"
           
-          # Push changes
-          git push origin homolog
+          # Force push with lease to avoid overwriting unexpected changes
+          git push origin homolog --force-with-lease
