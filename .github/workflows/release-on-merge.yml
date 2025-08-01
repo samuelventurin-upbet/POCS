@@ -1,0 +1,134 @@
+name: Release on Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Get branch name
+        id: branch_name
+        run: |
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Branch name: $BRANCH_NAME"
+      
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest tag, or use v0.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+      
+      - name: Calculate new version
+        id: new_version
+        run: |
+          BRANCH_NAME="${{ steps.branch_name.outputs.branch }}"
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+          
+          # Remove 'v' prefix if present
+          VERSION=${LATEST_TAG#v}
+          
+          # Split version into major, minor, patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          
+          # Default values if parsing fails
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+          
+          # Determine version bump based on branch prefix
+          if [[ "$BRANCH_NAME" =~ ^(fix|hotfix|bugfix)/ ]]; then
+            echo "Patch version bump detected"
+            PATCH=$((PATCH + 1))
+          elif [[ "$BRANCH_NAME" =~ ^(feature|feat)/ ]]; then
+            echo "Minor version bump detected"
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif [[ "$BRANCH_NAME" =~ ^(major|breaking)/ ]] || [[ "$BRANCH_NAME" =~ BREAKING[[:space:]]CHANGE ]]; then
+            echo "Major version bump detected"
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [[ "$BRANCH_NAME" =~ ^(release|chore|docs|style|refactor|perf|test|build|ci)/ ]]; then
+            echo "Patch version bump detected (maintenance)"
+            PATCH=$((PATCH + 1))
+          else
+            echo "No standard prefix found, defaulting to patch bump"
+            PATCH=$((PATCH + 1))
+          fi
+          
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+      
+      - name: Create tag
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+          git push origin "$NEW_VERSION"
+      
+      - name: Create pre-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.new_version.outputs.new_version }}
+          release_name: Release ${{ steps.new_version.outputs.new_version }}
+          body: |
+            ## Pre-release ${{ steps.new_version.outputs.new_version }}
+            
+            ### Changes
+            - PR: #${{ github.event.pull_request.number }}
+            - Branch: ${{ github.event.pull_request.head.ref }}
+            - Merged by: @${{ github.event.pull_request.merged_by.login }}
+            
+            ### Description
+            ${{ github.event.pull_request.body }}
+          draft: false
+          prerelease: true
+      
+      - name: Ensure homolog branch exists
+        run: |
+          # Check if homolog branch exists on remote
+          if ! git ls-remote --heads origin homolog | grep -q homolog; then
+            echo "Creating homolog branch from main"
+            git checkout -b homolog
+            git push origin homolog
+          else
+            echo "Homolog branch already exists"
+          fi
+      
+      - name: Merge release to homolog
+        run: |
+          # Fetch all branches
+          git fetch origin
+          
+          # Checkout homolog branch
+          git checkout homolog
+          git pull origin homolog
+          
+          # Merge the new tag into homolog
+          NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+          git merge "$NEW_VERSION" --no-ff -m "Merge $NEW_VERSION into homolog"
+          
+          # Push changes
+          git push origin homolog
