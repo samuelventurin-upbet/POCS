@@ -1,0 +1,139 @@
+name: HashCriticalModules
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  generate-and-send-hashes:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Faz checkout do repositório atual para acessar os arquivos
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Instala dependências necessárias para gerar ZIP e hashes
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends zip coreutils curl
+
+      # Gera arquivos ZIP determinísticos e hashes SHA256 para módulos críticos
+      - name: Generate ZIP files and SHA256 hashes
+        run: |
+          SRC_DIR="$(pwd)/apps/server/src/modules"
+          ZIP_OUTPUT_DIR="$(pwd)/zips"
+          MODULES=("deposit" "withdraw" "casino-bet" "auth" "user")
+
+          mkdir -p "$ZIP_OUTPUT_DIR"
+
+          for MODULE in "${MODULES[@]}"; do
+            MODULE_DIR="$SRC_DIR/$MODULE"
+            ZIP_FILE="${MODULE}.module-SNAPSHOT.zip"
+            
+            # Verifica se o diretório do módulo existe antes de prosseguir
+            if [ -d "$MODULE_DIR" ]; then
+              # Cria diretório temporário e copia arquivos para garantir isolamento
+              TMP_DIR=$(mktemp -d)
+              cp -r "$MODULE_DIR"/. "$TMP_DIR"/
+
+              # Padroniza timestamps para garantir ZIP determinístico
+              find "$TMP_DIR" -exec touch -t 202401010000 {} +
+
+              # Padroniza permissões para garantir ZIP determinístico
+              find "$TMP_DIR" -type f -exec chmod 644 {} +
+              find "$TMP_DIR" -type d -exec chmod 755 {} +
+
+              # Gera ZIP determinístico (sem metadados variáveis)
+              (cd "$TMP_DIR" && find . -type f | sort | zip -X -D -@ "$ZIP_OUTPUT_DIR/$ZIP_FILE")
+
+              # Remove diretório temporário após uso
+              rm -rf "$TMP_DIR"
+
+              # Calcula hash SHA256 do arquivo ZIP gerado
+              HASH=$(sha256sum "$ZIP_OUTPUT_DIR/$ZIP_FILE" | awk '{print $1}')
+              echo "$HASH" > "$ZIP_OUTPUT_DIR/${MODULE}.hash"
+            else
+              echo "⚠️ Aviso: Diretório $MODULE_DIR não encontrado"
+            fi
+          done
+
+      # Determina se a execução foi manual (workflow_dispatch) ou agendada
+      - name: Determine if manually run
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "manual_run=true" >> $GITHUB_ENV
+          else
+            echo "manual_run=false" >> $GITHUB_ENV
+          fi
+
+      # Envia arquivos ZIP, hashes e tipos para API externa
+      - name: Send ZIP files, hashes, and types to API
+        env:
+          BASE_URL_REPORTS_MS: ${{ secrets.BASE_URL_REPORTS_MS }}
+          API_KEY_REPORTS_MS: ${{ secrets.API_KEY_REPORTS_MS }}
+          MANUAL_RUN: ${{ env.manual_run }}
+        run: |
+          # Verifica se as variáveis de ambiente necessárias estão configuradas
+          if [ -z "$BASE_URL_REPORTS_MS" ] || [ -z "$API_KEY_REPORTS_MS" ]; then
+            echo "❌ Erro: BASE_URL_REPORTS_MS ou API_KEY_REPORTS_MS não configurados nos segredos do GitHub"
+            exit 1
+          fi
+
+          ZIP_OUTPUT_DIR="$(pwd)/zips"
+          MODULES=("deposit" "withdraw" "casino-bet" "auth" "user")
+          FAILED_MODULES=()
+
+          for MODULE in "${MODULES[@]}"; do
+            ZIP_FILE="$ZIP_OUTPUT_DIR/${MODULE}.module-SNAPSHOT.zip"
+            HASH_FILE="$ZIP_OUTPUT_DIR/${MODULE}.hash"
+
+            # Verifica se arquivos ZIP e hash existem antes de enviar
+            if [ -f "$ZIP_FILE" ] && [ -f "$HASH_FILE" ]; then
+              HASH=$(cat "$HASH_FILE")
+
+              # Envia dados para API com retry em caso de falha temporária
+              HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+                --retry 3 --retry-delay 5 --max-time 30 \
+                -X POST "$BASE_URL_REPORTS_MS/modules-hashes/critical" \
+                -H "x-api-key: ${API_KEY_REPORTS_MS}" \
+                -F "file=@${ZIP_FILE}" \
+                -F "hash=${HASH}" \
+                -F "type=${MODULE}" \
+                -F "manualRun=${MANUAL_RUN}")
+
+              # Verifica status HTTP da resposta da API
+              if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+                echo "✅ ${MODULE}: Arquivo, hash e tipo enviados com sucesso. Status: $HTTP_STATUS"
+              else
+                echo "❌ ${MODULE}: Erro ao enviar arquivo, hash e tipo. Status: $HTTP_STATUS"
+                echo "Resposta:"
+                cat response.txt
+                FAILED_MODULES+=("$MODULE")
+              fi
+            else
+              echo "⚠️ ${MODULE}: Arquivo ZIP ou hash não encontrado, pulando envio."
+              FAILED_MODULES+=("$MODULE")
+            fi
+          done
+
+          # Se algum módulo falhou, encerra o workflow com erro
+          if [ ${#FAILED_MODULES[@]} -ne 0 ]; then
+            echo "❌ Falha ao enviar os seguintes módulos: ${FAILED_MODULES[*]}"
+            exit 1
+          fi
+
+      # Faz upload dos arquivos ZIP gerados como artefato do GitHub Actions
+      - name: Upload ZIP files as artifact
+        uses: actions/upload-artifact@v4
+        if: ${{ !env.ACT }} # Não executa localmente com ferramenta act
+        with:
+          name: zipped-modules
+          path: zips/*.zip
+          retention-days: 7 # Não irá sobrescrever a configuração de retenção do repositório
+
+      # Registra no log o sucesso do upload dos artefatos
+      - name: Log artifact upload success
+        if: ${{ !env.ACT }} # Não executa localmente com ferramenta act
+        run: echo "✅ ZIP files successfully uploaded as artifact 'zipped-modules'."

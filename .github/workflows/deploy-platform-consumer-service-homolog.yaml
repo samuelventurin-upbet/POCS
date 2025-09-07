@@ -1,0 +1,58 @@
+name: DeployPlatoformConsumerServiceHml
+
+on:
+  workflow_dispatch:
+
+env:
+  VERSION: ${{ github.ref_name }}
+  AWS_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID_HML }}
+  AWS_REGION: sa-east-1
+  DOCKERHUB_ORGANIZATION: devupbet
+  DOCKERHUB_REPOSITORY: platform-consumer
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKERHUB_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  EKS_CLUSTER: cluster-hml
+  EKS_NAMESPACE: platform
+  EKS_DEPLOYMENT: platform-consumer-deployment
+  EKS_CONTAINER: platform-consumer
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if Docker image exists
+        uses: cloudposse/github-action-docker-image-exists@main
+        with:
+          registry: registry.hub.docker.com
+          organization: "${{ env.DOCKERHUB_ORGANIZATION }}"
+          repository: "${{ env.DOCKERHUB_REPOSITORY }}"
+          login: '${{ env.DOCKERHUB_USERNAME }}'
+          password: '${{ env.DOCKERHUB_PASSWORD }}'
+          tag: ${{ env.VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-pipeline
+          role-session-name: github-pipeline
+
+      - name: Update kubeconfig
+        id: kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
+
+      - name: Deploy to EKS
+        run: |
+          kubectl config set-context --current --namespace=${{ env.EKS_NAMESPACE }}
+          kubectl set image deployment/${{ env.EKS_DEPLOYMENT }} ${{ env.EKS_CONTAINER }}=${{ env.DOCKERHUB_ORGANIZATION }}/${{ env.DOCKERHUB_REPOSITORY }}:${{ env.VERSION }}
+          kubectl rollout status deployment/${{ env.EKS_DEPLOYMENT }}
+
+      - name: Restart Deployment
+        run: |
+          kubectl config set-context --current --namespace=${{ env.EKS_NAMESPACE }}
+          kubectl rollout restart deployment/${{ env.EKS_DEPLOYMENT }}

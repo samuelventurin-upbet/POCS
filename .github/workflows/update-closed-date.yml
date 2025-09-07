@@ -1,0 +1,59 @@
+name: Update Closed Date
+
+permissions:
+  issues: write
+  contents: write
+
+on:
+  issues:
+    types: [closed]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.PAT }}
+
+jobs:
+  update-closed-date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v2
+
+      - name: Set Closed Date in GitHub Project
+        uses: actions/github-script@v4
+        with:
+          script: |
+            const issue_number = context.payload.issue.number;
+            const closed_date = new Date().toISOString().split('T')[0];
+
+            const project_owner = context.repo.owner;
+            const project_repo = context.repo.repo;
+
+            // Obter os projetos do repositório
+            const projects = await github.projects.listForRepo({
+              owner: project_owner,
+              repo: project_repo
+            });
+
+            for (const project of projects.data) {
+              // Obter itens do projeto
+              const columns = await github.projects.listColumns({
+                project_id: project.id
+              });
+
+              for (const column of columns.data) {
+                const cards = await github.projects.listCards({
+                  column_id: column.id
+                });
+
+                for (const card of cards.data) {
+                  if (card.content_url && card.content_url.endsWith(`/issues/${issue_number}`)) {
+                    // Atualizar o campo 'Closed-Date' no cartão
+                    await github.projects.updateCard({
+                      card_id: card.id,
+                      note: `Closed-Date: ${closed_date}`
+                    });
+                    console.log(`Closed date set for issue #${issue_number} in project '${project.name}': ${closed_date}`);
+                  }
+                }
+              }
+            }

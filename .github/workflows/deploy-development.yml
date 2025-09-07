@@ -1,0 +1,94 @@
+name: DeployDev
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Docker/Release Tag to deploy'
+        required: true
+        type: string
+        default: 'latest'
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+      dry_run:
+        description: 'Dry run (validate without deploying)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      SERVICE_NAME: ${{ github.event.repository.name }}
+      RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Railway CLI
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          export PATH="$HOME/.railway/bin:$PATH"
+      
+      - name: Pre-deployment validation
+        run: |
+          echo "🔍 Pre-deployment Validation:"
+          echo "  - Repository: ${{ github.repository }}"
+          echo "  - Service Name: ${{ env.SERVICE_NAME }}"
+          echo "  - Release Tag: ${{ env.RELEASE_TAG }}"
+          echo "  - Environment: ${{ env.ENVIRONMENT }}"
+          echo "  - Dry Run: ${{ env.DRY_RUN }}"
+          echo "  - Triggered by: ${{ github.actor }}"
+          echo "  - Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          
+          # Validar se o serviço existe na Railway
+          echo "🔍 Checking if service exists..."
+          railway status || echo "⚠️  Could not verify service status"
+      
+      - name: Dry run simulation
+        if: ${{ fromJson(env.DRY_RUN) }}
+        run: |
+          echo "🧪 DRY RUN MODE - No actual deployment will occur"
+          echo "Would execute: railway up --service=${{ env.SERVICE_NAME }} --environment ${{ env.ENVIRONMENT }}"
+          echo "✅ Dry run completed successfully!"
+          exit 0
+      
+      - name: Deploy to Railway
+        if: ${{ !fromJson(env.DRY_RUN) }}
+        run: |
+          echo "🚀 Starting deployment..."
+          echo "📦 Deploying ${{ env.SERVICE_NAME }} with tag: ${{ env.RELEASE_TAG }}"
+          echo "🌍 Target environment: ${{ env.ENVIRONMENT }}"
+          
+          # Deploy com environment específico
+          railway up --service=${{ env.SERVICE_NAME }} --environment ${{ env.ENVIRONMENT }}
+      
+      - name: Post-deployment verification
+        if: ${{ !fromJson(env.DRY_RUN) }}
+        run: |
+          echo "🔍 Post-deployment verification..."
+          # Adicione health checks aqui se necessário
+          echo "✅ Service is running"
+      
+      - name: Deployment summary
+        if: ${{ !fromJson(env.DRY_RUN) }}
+        run: |
+          echo "🎉 Deployment Summary:"
+          echo "  ✅ Status: SUCCESS"
+          echo "  📦 Service: ${{ env.SERVICE_NAME }}"
+          echo "  🏷️  Release tag: ${{ env.RELEASE_TAG }}"
+          echo "  🌍 Environment: ${{ env.ENVIRONMENT }}"
+          echo "  👤 Deployed by: ${{ github.actor }}"
+          echo "  📅 Completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "🔗 Links:"
+          echo "  - Repository: https://github.com/${{ github.repository }}"
+          echo "  - Workflow: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

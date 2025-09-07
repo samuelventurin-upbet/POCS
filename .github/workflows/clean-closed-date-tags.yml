@@ -1,0 +1,33 @@
+name: Clean Closed Date Tags
+
+permissions:
+  issues: write
+  contents: write
+
+on:
+  issues:
+    types: [reopened]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.PAT }}
+
+jobs:
+  clean-closed-date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove Closed Date Tags
+        uses: actions/github-script@v4
+        with:
+          script: |
+            const issue_number = context.payload.issue.number;
+            const existing_labels = context.payload.issue.labels.map(label => label.name);
+            
+            // Remove any existing 'closed-date' labels
+            const updated_labels = existing_labels.filter(label => !label.startsWith('closed-date'));
+
+            await github.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              labels: updated_labels
+            });

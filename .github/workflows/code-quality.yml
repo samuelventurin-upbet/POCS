@@ -1,0 +1,62 @@
+name: CodeQuality
+
+on:
+  push:
+    branches:
+      - main
+      - stage
+  pull_request:
+    branches:
+      - main
+      - stage
+  workflow_dispatch:
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '20'  # Using Node.js >= 20
+      - uses: actions/checkout@v3
+      - name: Cache dependencies
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: ./node_modules
+          key: modules-${{ hashFiles('**/package.json') }}
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          npm install -g yarn@1.22.22
+          yarn install
+
+  server-quality:
+    if: github.actor != 'dependabot[bot]'
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Cache dependencies
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: ./node_modules
+          key: modules-${{ hashFiles('**/package.json') }}
+      - name: Lint
+        run: yarn workspace @repo/server lint
+
+  server-dash-quality:
+    if: github.actor != 'dependabot[bot]'
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Cache dependencies
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: ./node_modules
+          key: modules-${{ hashFiles('**/package.json') }}
+      - name: Lint
+        run: yarn workspace @repo/server-dash lint

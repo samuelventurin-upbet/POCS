@@ -1,0 +1,67 @@
+name: Build Release
+
+on:
+  release:
+    types:
+      - created
+  workflow_dispatch:
+
+jobs:
+  login-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+  build-server:
+    needs: login-docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Server Image
+        run: |
+          VERSION=${{ github.event.release.tag_name }}
+          docker buildx build --platform linux/arm64 \
+            --cache-to type=registry,ref=devupbet/server:cache,mode=max \
+            --cache-from type=registry,ref=devupbet/server:cache \
+            -t devupbet/server:$VERSION \
+            -f apps/server/Dockerfile . --push
+
+  build-server-dash:
+    needs: login-docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Server Dash Image
+        run: |
+          VERSION=${{ github.event.release.tag_name }}
+          docker buildx build --platform linux/arm64 \
+            --cache-to type=registry,ref=devupbet/server-dash:cache,mode=max \
+            --cache-from type=registry,ref=devupbet/server-dash:cache \
+            -t devupbet/server-dash:$VERSION \
+            -f apps/server-dash/Dockerfile . --push

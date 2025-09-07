@@ -1,0 +1,40 @@
+name: DeployProdServerDash
+
+on:
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: devupbet/server-dash:${{ github.ref_name }}
+
+jobs:
+
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Update kubeconfig
+        id: kubeconfig
+        run: |
+          aws eks update-kubeconfig --region sa-east-1 --name upbet2025-arm-cluster
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Deploy to EKS
+        run: |
+          kubectl set image deployment/server-dash-deployment server-dash=${{ env.IMAGE_NAME }}
+          kubectl rollout status deployment/server-dash-deployment
+
+      - name: Restart server-dash
+        run: |
+          kubectl rollout restart deployment/server-dash-deployment
